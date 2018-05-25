@@ -1,5 +1,6 @@
-﻿ * Datei:     tcpcoms.cs
- * Version:   22.05.2018
+﻿/* 
+ * Datei:     tcpcoms.cs
+ * Version:   25.05.2018
  * Besitzer:  Mathias Rentsch (rentsch@online.de)
  * Lizenz:    GPL
  *
@@ -28,24 +29,30 @@ namespace Tools
         private IPAddress localAddr = IPAddress.Any;
         private const int localPort = 13000;
         private const int maxLocalPorts = 5;
-        private TcpListener listener = null;
-        private ConcurrentBag<TcpClient> clients;
-        private ConcurrentBag<Thread> threads;
-        private int myListenerPort = 0;
-        private bool raus;
         private const int threadPause = 1000;
+        private TcpListener listener = null;
+        public ConcurrentBag<TcpClient> Clients;
+        private int listenerPort = 0;
+        private bool runned;
+        
         public event EventHandler<DataEventArgs> ReceiveData;
 
         public TcpComs()
         {
             lgg("TcpComs: Start");
-            clients = new ConcurrentBag<TcpClient>();
-            threads = new ConcurrentBag<Thread>();
-            raus = false;
+            Clients = new ConcurrentBag<TcpClient>();
+            runned = true;
             listenerStart();
-            Thread t = new Thread(listenerRun); t.Start(); t.Name = "Listener"; threads.Add(t);
-            Thread t2 = new Thread(step1); t2.Start(); t2.Name = "Init"; threads.Add(t2);
+            new Thread(listenerRun).Start(); 
+            new Thread(init1).Start();
 
+        }
+        public int ListenerPort
+        {
+            get
+            {
+                return listenerPort;
+            }
         }
         public void Senden(byte[] bytes)
         {
@@ -53,14 +60,10 @@ namespace Tools
             {
                 if (bytes.Length > 0)
                 {
-                    Thread t = new Thread(() =>
+                    ThreadPool.QueueUserWorkItem(new WaitCallback((o)=>
                     {
                         sendenIntern(bytes);
-                    })
-                    ;
-                    t.Start();
-                    t.Name = "SendenIntern";
-                    threads.Add(t);
+                    }));
                 }
                 else
                 {
@@ -77,7 +80,7 @@ namespace Tools
             try
             {
                 lgg("SendenIntern");
-                foreach (TcpClient client in clients)
+                foreach (TcpClient client in Clients)
                 {
                     try
                     {
@@ -105,7 +108,7 @@ namespace Tools
                 lgg("SendenIntern: Exception");
             }
         }
-        private void step1()
+        private void init1()
         {
             byte[] bytes = new byte[4];
             foreach (NetworkInterface netzwerk in NetworkInterface.GetAllNetworkInterfaces())
@@ -120,13 +123,13 @@ namespace Tools
                         {
                             bytes = info.Address.GetAddressBytes();
                             lgg("Netzwerkadapter: " + info.Address + " " + netzwerk.Name);
-                            step2(bytes[0], bytes[1], bytes[2]);
+                            init2(bytes[0], bytes[1], bytes[2]);
                         }
                     }
                 }
             }
         }
-        private void step2(int sec1, int sec2, int sec3)
+        private void init2(int sec1, int sec2, int sec3)
         {
             if (1 == 1
                 & sec1 != 129  // aus bestimmten Gründen  ;-)
@@ -152,7 +155,10 @@ namespace Tools
         {
             if (address != null)
             {
-                Thread t = new Thread(() =>
+                // Diese Threads nicht aus dem Threadpool nehmen, da sonst kurz an 
+                // init der TcpComs-Instanz die Rest-Ping-Threads die ersten Senden-Threads
+                // blockieren
+                new Thread(() =>
                 {
                     try
                     {
@@ -173,10 +179,7 @@ namespace Tools
                     {
                         lgg("Ping Exception: " + address.ToString() + " " + ex.Message);
                     }
-                });
-                t.Start();
-                t.Name = "Ping " + address.ToString();
-                threads.Add(t);
+                }).Start();
             }
             else
             {
@@ -235,7 +238,7 @@ namespace Tools
                         IPEndPoint remoteEndpoint = new IPEndPoint(address, localPort + i);
                         if (address.Equals(IPAddress.Loopback))   // localhost
                         {
-                            if (localPort + i == myListenerPort)
+                            if (localPort + i == listenerPort)
                             {
                                 lgg("Connect abgewiesen, da eigener ListenerEndPoint auf localhost. " + remoteEndpoint.ToString());
                             }
@@ -270,7 +273,7 @@ namespace Tools
         }
         private void connectInternThread(IPEndPoint remoteEndpoint)
         {
-            Thread t = new Thread(() =>
+            new Thread(() =>
             {
                 if (connect(remoteEndpoint))  // localPort ist auch der Zielport der Gegenseite
                 {
@@ -280,10 +283,7 @@ namespace Tools
                 {
                     lgg("Connect Fail: " + remoteEndpoint.ToString());
                 }
-            });
-            t.Start();
-            t.Name = "Connect IPEndPoint " + remoteEndpoint.ToString();
-            threads.Add(t);
+            }).Start();
         }
         private bool connect(IPEndPoint remoteEndpoint)
         {
@@ -299,12 +299,9 @@ namespace Tools
                     {
                         lgg("Connect: " + remoteEndpoint.ToString() + " Success: Neuer Client " + client.GetHashCode());
                         ret = true;
-                        clients.Add(client);
+                        Clients.Add(client);
                         lgg("Connect: Client " + client.GetHashCode().ToString() + " wurde clients hinzugefügt.");
-                        Thread t = new Thread(receive);
-                        t.Start(client);
-                        t.Name = "Receiver ";
-                        threads.Add(t);
+                        new Thread(receive).Start(client);
                     }
                     else
                     {
@@ -346,7 +343,7 @@ namespace Tools
             }
             return b;
         }
-        private bool isOwnListenerEndPoint(IPEndPoint endpoint)
+        /*private bool isOwnListenerEndPoint(IPEndPoint endpoint)
         {
             // EndPoint darf nicht an der eigenen Adresse mit dem eigenen MyListenerPort liegen
             bool b = false;
@@ -365,7 +362,7 @@ namespace Tools
                                 {
                                     if (endpoint.Address.Equals(info.Address))
                                     {
-                                        if (endpoint.Port == myListenerPort)
+                                        if (endpoint.Port == listenerPort)
                                         {
                                             b = true;
                                         }
@@ -378,6 +375,7 @@ namespace Tools
             }
             return b;
         }
+        */
         private IPAddress getAddress(int sec1, int sec2, int sec3, int sec4)
         {
             IPAddress address = null;
@@ -405,7 +403,7 @@ namespace Tools
                         listener = new TcpListener(localAddr, localPort + i);
                         listener.Start();       //throw new Exception();
                         lgg("Listener gestartet. Lokale Adresse: " + localAddr.ToString() + ":" + (localPort + i).ToString());
-                        myListenerPort = localPort + i;
+                        listenerPort = localPort + i;
                         i = 10; // raus
                     }
                     catch (Exception)
@@ -427,7 +425,7 @@ namespace Tools
                 if (listener != null)
                 {
                     lgg("ListenerRun: Waiting for a connection... ");
-                    while (!raus)
+                    while (runned)
                     {
                         if (listener.Pending())
                         {
@@ -437,15 +435,10 @@ namespace Tools
                             {
                                 lgg("ListenerRun: " + client.Client.LocalEndPoint.ToString() + " connected mit " + client.Client.RemoteEndPoint.ToString() + " Neuer Empfangs-Client " + client.GetHashCode());
 
-                                clients.Add(client);
+                                Clients.Add(client);
                                 lgg("ListenerRun: Client " + client.GetHashCode() + " wurde clients hinzugefügt.");
 
-                                //ThreadPool.QueueUserWorkItem(new WaitCallback(receive));
-
-                                Thread t = new Thread(receive);
-                                t.Start(client);
-                                t.Name = "Receiver ";
-                                threads.Add(t);
+                                new Thread(receive).Start(client);
                             }
                             else
                             {
@@ -476,7 +469,7 @@ namespace Tools
                     client = (TcpClient)obj;
                     Byte[] bytes = new Byte[3000];
                     NetworkStream stream = client.GetStream(); //Console.WriteLine("Stop Receiver"); Console.ReadLine();
-                    while (!raus)
+                    while (runned)
                     {
                         if (stream.DataAvailable)
                         {
@@ -501,7 +494,7 @@ namespace Tools
             bool b = false;
             if (client != null)
             {
-                foreach (TcpClient c in clients)
+                foreach (TcpClient c in Clients)
                 {
                     if (
                         (client.Client.LocalEndPoint.ToString() == c.Client.LocalEndPoint.ToString() &
@@ -521,15 +514,23 @@ namespace Tools
         public void Close()
         {
             lgg("Close");
-            foreach (TcpClient client in clients)
+            foreach (TcpClient client in Clients)
             {
                 client.Close();
+            }
+            runned = false;
+        }
+        public bool IsRunned
+        {
+            get
+            {
+                return runned;
             }
         }
         private void lgg(string text)
         {
             Console.WriteLine(text);
-            //s.w(text);
+            //s.w(text);   // Privater Logging-Mechanismus
         }
     }
 }

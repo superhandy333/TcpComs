@@ -45,6 +45,7 @@ namespace Tools
             {
                 lgg(b.ToString());
             }
+            Text = listbox1.Items.Count.ToString();
         }
 
         void button1_Click(object sender, EventArgs e)
@@ -58,8 +59,12 @@ namespace Tools
 
         void button2_Click(object sender, EventArgs e)
         {
-            tcp.Close();
             Close();
+        }
+
+        private void SampleForm_FormClosing(object sender, FormClosingEventArgs e)
+        {
+            tcp.Close();
         }
 
         void lgg(string text)
@@ -74,7 +79,6 @@ namespace Tools
             panel1.FlowDirection = FlowDirection.LeftToRight;
             panel1.Height = 30;
             panel1.Dock = DockStyle.Top;
-            Controls.Add(panel1);
 
             button1 = new Button();
             button1.Text = "Senden";
@@ -88,7 +92,14 @@ namespace Tools
 
             listbox1 = new ListBox();
             listbox1.Dock = DockStyle.Fill;
+
+
             Controls.Add(listbox1);
+            Controls.Add(panel1);
+
+            FormClosing += SampleForm_FormClosing;
         }
+
+        
     }
 }

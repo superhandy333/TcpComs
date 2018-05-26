@@ -9,27 +9,27 @@
  * unter http://www.gnu.org/licenses/gpl.html.
  */
 using System;
-using System.Collections.Generic;
-using System.Text;
-using System.IO;
 using System.Net;
-using System.Net.Mail;
-using System.Linq;
 using System.Net.Sockets;
-using System.Diagnostics;
-using Tools.Database;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Net.NetworkInformation;
 
 namespace Tools
 {
+    public class TcpComsOptions
+    {
+        public int LocalStartPort = 13000;
+        public int MaxLocalPorts = 5;
+        public int ThreadPause = 1000;
+        public bool MaxIPRange = false;          // Es wird nur von 1..100 angepingt, sonst bis 254
+        public bool PingLocalNetRange = true;    // Nur Adressen 192.168.* anpingen
+        public bool PingFritzBoxRange = false;   // Nur Adressen 192.168.178.* anpingen
+    }
     public class TcpComs
     {
+        private TcpComsOptions options;
         private IPAddress localAddr = IPAddress.Any;
-        private const int localPort = 13000;
-        private const int maxLocalPorts = 5;
-        private const int threadPause = 1000;
         private TcpListener listener = null;
         public ConcurrentBag<TcpClient> Clients;
         private int listenerPort = 0;
@@ -37,15 +37,24 @@ namespace Tools
         
         public event EventHandler<DataEventArgs> ReceiveData;
 
-        public TcpComs()
+        public TcpComs():this(null) { }
+        public TcpComs(TcpComsOptions options)
         {
             lgg("TcpComs: Start");
+            this.options = (options == null) ? new TcpComsOptions() : options;
+
+            lgg("LocalStartPort: " + this.options.LocalStartPort.ToString());
+            lgg("MaxLocalPorts: " + this.options.MaxLocalPorts.ToString());
+            lgg("MaxIPRange: " + this.options.MaxIPRange.ToString());
+            lgg("PingLocalNetRange: " + this.options.PingLocalNetRange.ToString());
+            lgg("PingFritzBoxRange: " + this.options.PingFritzBoxRange.ToString());
+            lgg("ThreadPause: " + this.options.ThreadPause.ToString());
+
             Clients = new ConcurrentBag<TcpClient>();
             runned = true;
             listenerStart();
-            new Thread(listenerRun).Start(); 
+            new Thread(listenerRun).Start();
             new Thread(init1).Start();
-
         }
         public int ListenerPort
         {
@@ -131,24 +140,25 @@ namespace Tools
         }
         private void init2(int sec1, int sec2, int sec3)
         {
-            if (1 == 1
-                & sec1 != 129  // aus bestimmten Gründen  ;-)
-                & sec1 != 0
-                //& sec1 != 127
-                )
-            {
-                int sec4max =
-                   (sec1 == 127 &
-                     sec2 == 0 &
-                     sec3 == 0
-                    )
-                ? 1 : 254;   // Ausnahme bei localhost (sec1=127)
+            if (sec1 == 129) return; // aus bestimmten Gründen  ;-)
+            if (sec1 == 0) return;
+            if (sec1 != 127 & options.PingLocalNetRange & (sec1 != 192 | sec2 != 168)) return;
+            if (sec1 != 127 & options.PingFritzBoxRange & (sec1 != 192 | sec2 != 168 | sec3 != 178)) return;
 
-                for (int sec4 = 1; sec4 <= sec4max; sec4++)
-                {
-                    pingE(getAddress(sec1, sec2, sec3, sec4));
-                    //lgg(sec1.ToString() + ":" + sec2.ToString() + ":" + sec3.ToString() + ":" + sec4.ToString());
-                }
+            int sec4max;
+            if (sec1 == 127 & sec2 == 0 & sec3 == 0)  // Ausnahme bei localhost (sec1=127)
+            {
+                sec4max = 1;
+            }
+            else
+            {
+                sec4max = options.MaxIPRange ? 254 : 100;     
+            }
+
+            for (int sec4 = 1; sec4 <= sec4max; sec4++)
+            {
+                pingE(getAddress(sec1, sec2, sec3, sec4));
+                lgg("Ping: "+sec1.ToString() + ":" + sec2.ToString() + ":" + sec3.ToString() + ":" + sec4.ToString());
             }
         }
         private void pingE(IPAddress address)  // Ping mit Einzelthreads
@@ -233,12 +243,12 @@ namespace Tools
             {
                 if (address != null)
                 {
-                    for (int i = 0; i < maxLocalPorts; i++)
+                    for (int i = 0; i < options.MaxLocalPorts; i++)
                     {
-                        IPEndPoint remoteEndpoint = new IPEndPoint(address, localPort + i);
+                        IPEndPoint remoteEndpoint = new IPEndPoint(address, options.LocalStartPort + i);
                         if (address.Equals(IPAddress.Loopback))   // localhost
                         {
-                            if (localPort + i == listenerPort)
+                            if (options.LocalStartPort + i == listenerPort)
                             {
                                 lgg("Connect abgewiesen, da eigener ListenerEndPoint auf localhost. " + remoteEndpoint.ToString());
                             }
@@ -396,19 +406,19 @@ namespace Tools
             {
                 lgg("Listener: Start...");
 
-                for (int i = 0; i < maxLocalPorts; i++)
+                for (int i = 0; i < options.MaxLocalPorts; i++)
                 {
                     try
                     {
-                        listener = new TcpListener(localAddr, localPort + i);
+                        listener = new TcpListener(localAddr, options.LocalStartPort + i);
                         listener.Start();       //throw new Exception();
-                        lgg("Listener gestartet. Lokale Adresse: " + localAddr.ToString() + ":" + (localPort + i).ToString());
-                        listenerPort = localPort + i;
+                        lgg("Listener gestartet. Lokale Adresse: " + localAddr.ToString() + ":" + (options.LocalStartPort + i).ToString());
+                        listenerPort = options.LocalStartPort + i;
                         i = 10; // raus
                     }
                     catch (Exception)
                     {
-                        lgg("ListenerStart: Exception: Listener konnte am lokalen Port: " + localPort.ToString() + " (alle Adapter) nicht gestartet werden (Port besetzt?)");
+                        lgg("ListenerStart: Exception: Listener konnte am lokalen Port: " + options.LocalStartPort.ToString() + " (alle Adapter) nicht gestartet werden (Port besetzt?)");
                         listener = null;
                     }
                 }
@@ -446,7 +456,7 @@ namespace Tools
                                 client.Dispose();
                             }
                         }
-                        Thread.Sleep(threadPause); //Console.WriteLine("Stop Listener"); Console.ReadLine();
+                        Thread.Sleep(options.ThreadPause); //Console.WriteLine("Stop Listener"); Console.ReadLine();
                     }
                 }
                 else
@@ -479,7 +489,7 @@ namespace Tools
                             Array.Copy(bytes, sendbytes, i);
                             if (ReceiveData != null) ReceiveData(this, new DataEventArgs(client.Client.RemoteEndPoint,sendbytes)); // Wichtig ist hier, dass die Daten geklont werden
                         }
-                        Thread.Sleep(threadPause);
+                        Thread.Sleep(options.ThreadPause);
                     }
                 }
             }
